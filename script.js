@@ -203,6 +203,8 @@ $("#fontSize").addEventListener("input", ()=>{
 $("#boldEdges").addEventListener("change", buildWheel);
 $("#showReport").addEventListener("change", renderReport);
 $("#spin").addEventListener("click", spin);
+// モバイル端末でのタッチ操作にも対応
+$("#spin").addEventListener("touchstart", (e)=>{ e.preventDefault(); spin(); });
 
 // 初期描画
 applySettings();
