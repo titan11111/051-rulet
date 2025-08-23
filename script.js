@@ -169,7 +169,8 @@ function spin(){
   // アニメ完了後
   const onEnd = ()=>{
     wheelGroup.classList.remove("spin-anim");
-    currentRotation = finalRotation % 360;
+    // Keep the absolute rotation so each spin animates with full turns.
+    currentRotation = finalRotation;
     wheelGroup.removeEventListener("transitionend", onEnd);
     const winner = labels[idx];
     resultEl.textContent = `当選：${winner}`;
