@@ -188,7 +188,7 @@ button.spin:active{
 
 /* 回転アニメ */
 .spin-anim{
-  transition: transform 3.2s cubic-bezier(.08,.63,0,1.02);
+  transition: transform 10s cubic-bezier(.08,.63,0,1.02);
 }
 
 /* アクセシビリティ（ユーザーが大きい文字を選んだときの余白） */

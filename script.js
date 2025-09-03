@@ -158,7 +158,7 @@ function spin(){
   const centerDeg = -90 + idx*sliceAngle + sliceAngle/2;
 
   // 中心がポインタ（-90度）に来るように回転量を計算
-  const turns = 8 + Math.floor(Math.random()*4); // 8〜11回転
+  const turns = 30 + Math.floor(Math.random()*10); // 30〜39回転
   const targetRotation = (turns*360) + (-90 - centerDeg);
 
   const finalRotation = currentRotation + targetRotation;
