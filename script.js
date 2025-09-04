@@ -1,208 +1,316 @@
-// ====== ユーティリティ ======
-const $ = (sel) => document.querySelector(sel);
-const wheel = $("#wheel");
-const wheelGroup = $("#wheelGroup");
-const resultEl = $("#result");
-const reportBox = $("#reportBox");
-const reportList = $("#reportList");
-
-// HSV→RGB（鮮やかな配色を自動生成）
-function hsvToRgb(h, s, v){
-  let f = (n, k=(n + h/60)%6) => v - v*s*Math.max(Math.min(k,4-k,1),0);
-  return [f(5), f(3), f(1)].map(x => Math.round(x*255));
-}
-function rgbToHex([r,g,b]){ return `#${[r,g,b].map(x => x.toString(16).padStart(2,'0')).join('')}`; }
-
-// 相対輝度・コントラスト比
-function relLuminance(hex){
-  const [r,g,b] = hex.replace('#','').match(/.{2}/g).map(h=>parseInt(h,16)/255).map(v=>{
-    return v<=0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4);
-  });
-  return 0.2126*r + 0.7152*g + 0.0722*b;
-}
-function contrastRatio(hex1, hex2){
-  const L1 = relLuminance(hex1), L2 = relLuminance(hex2);
-  const [a,b] = L1 > L2 ? [L1,L2] : [L2,L1];
-  return (a + 0.05) / (b + 0.05);
-}
-function bestTextColor(bg){
-  const cWhite = contrastRatio(bg, "#ffffff");
-  const cBlack = contrastRatio(bg, "#000000");
-  return cWhite >= cBlack ? "#ffffff" : "#000000";
-}
-
-// 座標変換
-function deg2rad(d){ return (d * Math.PI) / 180; }
-function polar(cx, cy, r, deg){
-  const rad = deg2rad(deg);
-  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
-}
-
-// ドーナツ型スライスのパス
-function donutSlicePath(cx, cy, rOuter, rInner, startDeg, endDeg){
-  const largeArc = (endDeg - startDeg) % 360 > 180 ? 1 : 0;
-  const p1 = polar(cx, cy, rOuter, startDeg);
-  const p2 = polar(cx, cy, rOuter, endDeg);
-  const p3 = polar(cx, cy, rInner, endDeg);
-  const p4 = polar(cx, cy, rInner, startDeg);
-  return [
-    `M ${p1.x} ${p1.y}`,
-    `A ${rOuter} ${rOuter} 0 ${largeArc} 1 ${p2.x} ${p2.y}`,
-    `L ${p3.x} ${p3.y}`,
-    `A ${rInner} ${rInner} 0 ${largeArc} 0 ${p4.x} ${p4.y}`,
-    "Z"
-  ].join(" ");
-}
-
-// ====== 盤面生成 ======
-let labels = [];
-let fontPx = 24;
-let useStroke = true;
-let currentRotation = 0;
-const CX=250, CY=250, R_OUT=230, R_IN=120; // ドーナツ半径
-let colors = [];
-
-function buildColors(n){
-  colors = Array.from({length:n}, (_,i)=>{
-    const h = Math.round((360 / n) * i);
-    const rgb = hsvToRgb(h, 0.65, 0.98);
-    return rgbToHex(rgb);
-  });
-}
-
-function buildWheel(){
-  wheelGroup.innerHTML = "";
-  const n = labels.length;
-  if(n === 0) return;
-
-  buildColors(n);
-  const sliceAngle = 360 / n;
-
-  for(let i=0;i<n;i++){
-    const start = -90 + i*sliceAngle;
-    const end = start + sliceAngle;
-    const mid = start + sliceAngle/2;
-
-    // スライスパス
-    const path = document.createElementNS("http://www.w3.org/2000/svg","path");
-    path.setAttribute("d", donutSlicePath(CX,CY,R_OUT,R_IN,start,end));
-    path.setAttribute("fill", colors[i]);
-    path.setAttribute("stroke", "#111");
-    path.setAttribute("stroke-width", "1");
-    wheelGroup.appendChild(path);
-
-    // ラベル（常に正向きに補正）
-    const rText = (R_OUT + R_IN) / 2;
-    const pos = polar(CX, CY, rText, mid);
-    let rotate = mid + 90; // 接線方向に
-    if(rotate > 90 && rotate < 270){ rotate -= 180; } // 逆さ防止
-
-    const text = document.createElementNS("http://www.w3.org/2000/svg","text");
-    text.classList.add("slice-label");
-    text.setAttribute("x", pos.x.toFixed(2));
-    text.setAttribute("y", pos.y.toFixed(2));
-    text.setAttribute("transform", `rotate(${rotate.toFixed(2)}, ${pos.x.toFixed(2)}, ${pos.y.toFixed(2)})`);
-    text.setAttribute("font-size", `${fontPx}px`);
-
-    const bg = colors[i];
-    const fg = bestTextColor(bg);
-    text.setAttribute("fill", fg);
-    if(useStroke){
-      text.setAttribute("stroke", fg === "#000000" ? "#ffffff" : "#000000");
-      text.setAttribute("stroke-width", "3");
-    } else {
-      text.setAttribute("stroke", "none");
+// ゲーム状態管理
+class RouletteGame {
+    constructor() {
+        this.items = [];
+        this.canvas = document.getElementById('rouletteCanvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.isSpinning = false;
+        this.currentRotation = 0;
+        this.audioContext = null;
+        this.audioEnabled = false;
+        
+        // 要素の取得
+        this.itemInput = document.getElementById('itemInput');
+        this.addBtn = document.getElementById('addBtn');
+        this.spinBtn = document.getElementById('spinBtn');
+        this.currentItems = document.getElementById('currentItems');
+        this.result = document.getElementById('result');
+        
+        this.init();
     }
-
-    // ラベルの詰め調整：弧長の90%に収める
-    const arcLen = 2 * Math.PI * ((R_OUT+R_IN)/2) * (sliceAngle/360);
-    text.setAttribute("textLength", Math.max(arcLen*0.88, 40).toFixed(0));
-    text.setAttribute("lengthAdjust", "spacingAndGlyphs");
-
-    text.textContent = labels[i];
-    wheelGroup.appendChild(text);
-  }
-
-  // 視認性レポート
-  renderReport();
+    
+    init() {
+        // イベントリスナーの設定
+        this.addBtn.addEventListener('click', () => this.addItem());
+        this.itemInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                this.addItem();
+            }
+        });
+        this.spinBtn.addEventListener('click', () => this.spin());
+        
+        // iPhoneでの音声再生のために最初のタッチで音声コンテキストを初期化
+        document.addEventListener('touchstart', () => this.initAudio(), { once: true });
+        document.addEventListener('click', () => this.initAudio(), { once: true });
+        
+        // 初期描画
+        this.drawRoulette();
+        this.updateItemsList();
+        
+        // デフォルト項目を追加（デモ用）
+        this.items = ['りんご', 'みかん', 'ばなな'];
+        this.updateDisplay();
+    }
+    
+    // 音声コンテキストの初期化（iPhone対応）
+    async initAudio() {
+        if (!this.audioEnabled) {
+            try {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                await this.audioContext.resume();
+                this.audioEnabled = true;
+                console.log('音声が有効になりました');
+            } catch (error) {
+                console.log('音声の初期化に失敗しました:', error);
+            }
+        }
+    }
+    
+    // 効果音の生成と再生
+    playSound(frequency, duration, type = 'sine') {
+        if (!this.audioEnabled || !this.audioContext) return;
+        
+        try {
+            const oscillator = this.audioContext.createOscillator();
+            const gainNode = this.audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(this.audioContext.destination);
+            
+            oscillator.frequency.setValueAtTime(frequency, this.audioContext.currentTime);
+            oscillator.type = type;
+            
+            gainNode.gain.setValueAtTime(0.1, this.audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + duration);
+            
+            oscillator.start(this.audioContext.currentTime);
+            oscillator.stop(this.audioContext.currentTime + duration);
+        } catch (error) {
+            console.log('音声再生エラー:', error);
+        }
+    }
+    
+    // 回転音の再生
+    playSpinSound() {
+        if (!this.audioEnabled) return;
+        
+        let frequency = 200;
+        const interval = setInterval(() => {
+            this.playSound(frequency, 0.1, 'sawtooth');
+            frequency += 10;
+            if (frequency > 800) frequency = 200;
+        }, 100);
+        
+        setTimeout(() => {
+            clearInterval(interval);
+        }, 3000);
+    }
+    
+    // 結果音の再生
+    playResultSound() {
+        if (!this.audioEnabled) return;
+        
+        // ファンファーレ風の音
+        setTimeout(() => this.playSound(523, 0.2), 0);    // C
+        setTimeout(() => this.playSound(659, 0.2), 200);  // E
+        setTimeout(() => this.playSound(784, 0.2), 400);  // G
+        setTimeout(() => this.playSound(1047, 0.4), 600); // C
+    }
+    
+    // 項目を追加
+    addItem() {
+        const text = this.itemInput.value.trim();
+        if (text && !this.items.includes(text)) {
+            if (this.items.length < 12) { // 最大12項目
+                this.items.push(text);
+                this.itemInput.value = '';
+                this.updateDisplay();
+                this.playSound(440, 0.1); // 追加音
+            } else {
+                alert('項目は最大12個までです！');
+            }
+        } else if (this.items.includes(text)) {
+            alert('同じ項目は追加できません！');
+        }
+    }
+    
+    // 項目を削除
+    removeItem(index) {
+        this.items.splice(index, 1);
+        this.updateDisplay();
+        this.playSound(330, 0.1); // 削除音
+    }
+    
+    // 表示を更新
+    updateDisplay() {
+        this.drawRoulette();
+        this.updateItemsList();
+        this.spinBtn.disabled = this.items.length < 2;
+    }
+    
+    // 項目リストを更新
+    updateItemsList() {
+        this.currentItems.innerHTML = '';
+        
+        if (this.items.length === 0) {
+            this.currentItems.innerHTML = '<p style="color: #666;">まだ項目がありません</p>';
+            return;
+        }
+        
+        this.items.forEach((item, index) => {
+            const tag = document.createElement('div');
+            tag.className = 'item-tag';
+            tag.innerHTML = `
+                ${item}
+                <button class="remove-btn" onclick="rouletteGame.removeItem(${index})">×</button>
+            `;
+            this.currentItems.appendChild(tag);
+        });
+    }
+    
+    // ルーレットを描画
+    drawRoulette() {
+        const canvas = this.canvas;
+        const ctx = this.ctx;
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
+        const radius = Math.min(centerX, centerY) - 10;
+        
+        // キャンバスをクリア
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        if (this.items.length === 0) {
+            // 項目がない場合の表示
+            ctx.fillStyle = '#e2e8f0';
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = '#666';
+            ctx.font = 'bold 16px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('項目を追加してね！', centerX, centerY);
+            return;
+        }
+        
+        // 色のパレット
+        const colors = [
+            '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', 
+            '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F',
+            '#BB8FCE', '#85C1E9', '#82E0AA', '#F8C471'
+        ];
+        
+        const anglePerItem = (Math.PI * 2) / this.items.length;
+        
+        // 各セクションを描画
+        this.items.forEach((item, index) => {
+            const startAngle = index * anglePerItem + this.currentRotation;
+            const endAngle = startAngle + anglePerItem;
+            
+            // セクションを塗りつぶし
+            ctx.fillStyle = colors[index % colors.length];
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY);
+            ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+            ctx.closePath();
+            ctx.fill();
+            
+            // 境界線を描画
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY);
+            ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+            ctx.closePath();
+            ctx.stroke();
+            
+            // テキストを描画
+            const textAngle = startAngle + anglePerItem / 2;
+            const textRadius = radius * 0.7;
+            const textX = centerX + Math.cos(textAngle) * textRadius;
+            const textY = centerY + Math.sin(textAngle) * textRadius;
+            
+            ctx.save();
+            ctx.translate(textX, textY);
+            ctx.rotate(textAngle + Math.PI / 2);
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 14px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+            ctx.shadowBlur = 2;
+            ctx.fillText(item, 0, 0);
+            ctx.restore();
+        });
+        
+        // 中央の円
+        ctx.fillStyle = '#2d3748';
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, 20, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 16px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🎯', centerX, centerY);
+    }
+    
+    // ルーレットを回す
+    spin() {
+        if (this.isSpinning || this.items.length < 2) return;
+        
+        this.isSpinning = true;
+        this.spinBtn.disabled = true;
+        this.result.className = 'result';
+        this.result.innerHTML = '';
+        
+        // 回転音を再生
+        this.playSpinSound();
+        
+        // 回転の計算
+        const spins = 5 + Math.random() * 5; // 5-10回転
+        const finalAngle = Math.random() * Math.PI * 2;
+        const totalRotation = spins * Math.PI * 2 + finalAngle;
+        
+        const startTime = Date.now();
+        const duration = 3000; // 3秒
+        const startRotation = this.currentRotation;
+        
+        const animate = () => {
+            const elapsed = Date.now() - startTime;
+            const progress = Math.min(elapsed / duration, 1);
+            
+            // イージング関数（徐々に遅くなる）
+            const easeOut = 1 - Math.pow(1 - progress, 3);
+            
+            this.currentRotation = startRotation + totalRotation * easeOut;
+            this.drawRoulette();
+            
+            if (progress < 1) {
+                requestAnimationFrame(animate);
+            } else {
+                // 回転終了
+                this.finishSpin(finalAngle);
+            }
+        };
+        
+        animate();
+    }
+    
+    // 回転終了処理
+    finishSpin(finalAngle) {
+        this.isSpinning = false;
+        this.spinBtn.disabled = false;
+        
+        // 結果を計算（ポインターの位置から逆算）
+        const anglePerItem = (Math.PI * 2) / this.items.length;
+        const normalizedAngle = (Math.PI * 2 - (finalAngle % (Math.PI * 2))) % (Math.PI * 2);
+        const selectedIndex = Math.floor(normalizedAngle / anglePerItem);
+        const winner = this.items[selectedIndex];
+        
+        // 結果を表示
+        setTimeout(() => {
+            this.result.className = 'result show';
+            this.result.innerHTML = `🎉 結果: <strong>${winner}</strong> 🎉`;
+            this.playResultSound();
+        }, 500);
+    }
 }
 
-function renderReport(){
-  const show = $("#showReport").checked;
-  reportBox.open = show;
-  reportBox.style.display = show ? "block" : "none";
-  reportList.innerHTML = "";
-  labels.forEach((lab,i)=>{
-    const bg = colors[i];
-    const fg = bestTextColor(bg);
-    const ratio = contrastRatio(bg, fg);
-    const li = document.createElement("li");
-    const score = ratio.toFixed(2);
-    li.textContent = `${i+1}. ${lab} — 背景 ${bg} / 文字 ${fg} → コントラスト比 ${score}:1`;
-    reportList.appendChild(li);
-  });
-}
-
-// ====== スピン ======
-let spinning = false;
-
-function spin(){
-  if(spinning || labels.length === 0) return;
-  spinning = true;
-  $("#spin").disabled = true;
-
-  // 当選インデックスをランダムに
-  const n = labels.length;
-  const idx = Math.floor(Math.random() * n);
-  const sliceAngle = 360 / n;
-  const centerDeg = -90 + idx*sliceAngle + sliceAngle/2;
-
-  // 中心がポインタ（-90度）に来るように回転量を計算
-  const turns = 30 + Math.floor(Math.random()*10); // 30〜39回転
-  const targetRotation = (turns*360) + (-90 - centerDeg);
-
-  const finalRotation = currentRotation + targetRotation;
-
-  wheelGroup.classList.add("spin-anim");
-  wheelGroup.setAttribute("transform", `rotate(${finalRotation}, ${CX}, ${CY})`);
-
-  // アニメ完了後
-  const onEnd = ()=>{
-    wheelGroup.classList.remove("spin-anim");
-    // Keep the absolute rotation so each spin animates with full turns.
-    currentRotation = finalRotation;
-    wheelGroup.removeEventListener("transitionend", onEnd);
-    const winner = labels[idx];
-    resultEl.textContent = `当選：${winner}`;
-    spinning = false;
-    $("#spin").disabled = false;
-  };
-  wheelGroup.addEventListener("transitionend", onEnd);
-}
-
-// ====== イベントと初期化 ======
-function readLabels(){
-  labels = $("#labelsInput").value
-    .split(/\r?\n/)
-    .map(s => s.trim())
-    .filter(Boolean);
-}
-function applySettings(){
-  readLabels();
-  fontPx = parseInt($("#fontSize").value,10);
-  useStroke = $("#boldEdges").checked;
-  $("#fontSizeVal").textContent = `${fontPx}px`;
-  buildWheel();
-}
-$("#apply").addEventListener("click", applySettings);
-$("#fontSize").addEventListener("input", ()=>{
-  $("#fontSizeVal").textContent = `${$("#fontSize").value}px`;
-  fontPx = parseInt($("#fontSize").value,10);
-  buildWheel();
+// ゲームを開始
+let rouletteGame;
+document.addEventListener('DOMContentLoaded', () => {
+    rouletteGame = new RouletteGame();
 });
-$("#boldEdges").addEventListener("change", buildWheel);
-$("#showReport").addEventListener("change", renderReport);
-$("#spin").addEventListener("click", spin);
-
-// 初期描画
-applySettings();
